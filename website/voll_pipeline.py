@@ -19,6 +19,14 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Tuple, Any
 import random
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Configuration constants
+MIN_VALID_LOAD = 1.0  # Minimum valid load threshold
+MAX_VALID_LOAD = 2.0  # Maximum valid load threshold
 
 
 # -----------------------------
@@ -241,6 +249,53 @@ def _voll_hesapla_tek(
     return result, float(kesinti_saat)
 
 
+def _gün_saat_veri_seçimi(df_tahmin: pd.DataFrame, cba_config: Any) -> pd.DataFrame:
+    """
+    Select data for specified day and hour.
+    
+    This helper function extracts the common logic for selecting prediction data
+    based on the configured day and hour from cba_config.
+    
+    Args:
+        df_tahmin: Prediction dataframe with 'Profil Tarihi' column
+        cba_config: Configuration object with maliyet.değişim_günü and maliyet.değişim_saati
+        
+    Returns:
+        Filtered dataframe with one row matching the specified day and hour
+    """
+    df_tahmin = df_tahmin.copy()
+    
+    değişim_günü_str = cba_config.maliyet.değişim_günü
+    gün_mapping = {
+        'Pazartesi': 1,
+        'Salı': 2,
+        'Çarşamba': 3,
+        'Perşembe': 4,
+        'Cuma': 5,
+        'Cumartesi': 6,
+        'Pazar': 7
+    }
+
+    değişim_saat = cba_config.maliyet.değişim_saati
+    df_tahmin['Profil Tarihi'] = pd.to_datetime(df_tahmin['Profil Tarihi'])
+    df_tahmin['Gün'] = df_tahmin['Profil Tarihi'].dt.dayofweek + 1
+    df_tahmin['Saat'] = df_tahmin['Profil Tarihi'].dt.hour.astype(str) + ":00"
+
+    değişim_günü = gün_mapping.get(değişim_günü_str, 1)
+
+    df_tahmin_seç = df_tahmin[
+        (df_tahmin["Gün"] == değişim_günü) &
+        (df_tahmin["Saat"] == değişim_saat)
+    ]
+
+    if _safe_len(df_tahmin_seç) == 0:
+        return df_tahmin.iloc[[0], :]
+    else:
+        random_int = random.randint(0, len(df_tahmin_seç) - 1) if len(df_tahmin_seç) > 0 else 0
+        pos = df_tahmin_seç.index[random_int] if len(df_tahmin_seç) > 0 else 0
+        return df_tahmin[df_tahmin.index == pos]
+
+
 # -----------------------------
 # Optimized Neighbor Pre-computation
 # -----------------------------
@@ -274,40 +329,6 @@ def _precompute_neighbor_data(
     """
     neighbor_cache = {}
     
-    def gün_saat_veri_seçimi(df_tahmin: pd.DataFrame) -> pd.DataFrame:
-        """Select data for specified day and hour"""
-        df_tahmin = df_tahmin.copy()
-        
-        değişim_günü_str = cba_config.maliyet.değişim_günü
-        gün_mapping = {
-            'Pazartesi': 1,
-            'Salı': 2,
-            'Çarşamba': 3,
-            'Perşembe': 4,
-            'Cuma': 5,
-            'Cumartesi': 6,
-            'Pazar': 7
-        }
-
-        değişim_saat = cba_config.maliyet.değişim_saati
-        df_tahmin['Profil Tarihi'] = pd.to_datetime(df_tahmin['Profil Tarihi'])
-        df_tahmin['Gün'] = df_tahmin['Profil Tarihi'].dt.dayofweek + 1
-        df_tahmin['Saat'] = df_tahmin['Profil Tarihi'].dt.hour.astype(str) + ":00"
-
-        değişim_günü = gün_mapping.get(değişim_günü_str, 1)
-
-        df_tahmin_seç = df_tahmin[
-            (df_tahmin["Gün"] == değişim_günü) &
-            (df_tahmin["Saat"] == değişim_saat)
-        ]
-
-        if _safe_len(df_tahmin_seç) == 0:
-            return df_tahmin.iloc[[0], :]
-        else:
-            random_int = random.randint(0, len(df_tahmin_seç) - 1) if len(df_tahmin_seç) > 0 else 0
-            pos = df_tahmin_seç.index[random_int] if len(df_tahmin_seç) > 0 else 0
-            return df_tahmin[df_tahmin.index == pos]
-    
     for neighbor_id in neighbor_ids:
         try:
             # Filter data for this neighbor
@@ -330,9 +351,9 @@ def _precompute_neighbor_data(
             if df_neighbor_tahmin_filtered.empty:
                 df_neighbor_tahmin_filtered = df_neighbor_tahmin.copy()
             
-            # Prepare final dataframe
+            # Prepare final dataframe using shared helper function
             df_final_neighbor = _df_final_hazirla(
-                gün_saat_veri_seçimi(df_neighbor_tahmin_filtered),
+                _gün_saat_veri_seçimi(df_neighbor_tahmin_filtered, cba_config),
                 df_neighbor_trafo,
                 neighbor_id
             )
@@ -373,7 +394,7 @@ def _precompute_neighbor_data(
             
         except Exception as e:
             # Log error but continue processing other neighbors
-            print(f"Warning: Could not pre-compute neighbor {neighbor_id}: {e}")
+            logger.warning(f"Could not pre-compute neighbor {neighbor_id}: {e}")
             continue
     
     return neighbor_cache
@@ -416,39 +437,6 @@ def asama5_karsilastirma(
         Comparison dataframe with VoLL and cost calculations
     """
 
-    def gün_saat_veri_seçimi(df_tahmin: pd.DataFrame) -> pd.DataFrame:
-        """Belirlenen gün ve saate göre veri seçer"""
-        df_tahmin = df_tahmin.copy()
-        
-        değişim_günü_str = cba_config.maliyet.değişim_günü
-        gün_mapping = {
-            'Pazartesi': 1,
-            'Salı': 2,
-            'Çarşamba': 3,
-            'Perşembe': 4,
-            'Cuma': 5,
-            'Cumartesi': 6,
-            'Pazar': 7
-        }
-
-        değişim_saat = cba_config.maliyet.değişim_saati
-        df_tahmin['Profil Tarihi'] = pd.to_datetime(df_tahmin['Profil Tarihi'])
-        df_tahmin['Gün'] = df_tahmin['Profil Tarihi'].dt.dayofweek + 1
-        df_tahmin['Saat'] = df_tahmin['Profil Tarihi'].dt.hour.astype(str) + ":00"
-
-        değişim_günü = gün_mapping.get(değişim_günü_str, 1)
-
-        df_tahmin_seç = df_tahmin[
-            (df_tahmin["Gün"] == değişim_günü) &
-            (df_tahmin["Saat"] == değişim_saat)
-        ]
-
-        if _safe_len(df_tahmin_seç) == 0:
-            return df_tahmin.iloc[[0], :]
-        else:
-            random_int = random.randint(0, len(df_tahmin_seç) - 1) if len(df_tahmin_seç) > 0 else 0
-            pos = df_tahmin_seç.index[random_int] if len(df_tahmin_seç) > 0 else 0
-            return df_tahmin[df_tahmin.index == pos]
 
     # Aday hazırlık (Candidate preparation)
     trafoser_no_aday = df_aday_trafo['Tanım Numarası'].iloc[0]
@@ -467,7 +455,7 @@ def asama5_karsilastirma(
         df_aday_tahmin_filtered = df_aday_tahmin.copy()
 
     df_final_aday = _df_final_hazirla(
-        gün_saat_veri_seçimi(df_aday_tahmin_filtered), 
+        _gün_saat_veri_seçimi(df_aday_tahmin_filtered, cba_config), 
         df_aday_trafo, 
         trafoser_no_aday
     )
@@ -513,7 +501,7 @@ def asama5_karsilastirma(
             df_komsu_tahmin_filtered = df_komsu_tahmin.copy()
 
         df_final_komsu = _df_final_hazirla(
-            gün_saat_veri_seçimi(df_komsu_tahmin_filtered), 
+            _gün_saat_veri_seçimi(df_komsu_tahmin_filtered, cba_config), 
             df_komsu_trafo,
             trafoser_no_komsu
         )
@@ -700,7 +688,7 @@ def run_voll_pipeline(
         df_aday_tahmin = df_tahmin[df_tahmin["Tanım Numarası"] == aday_tanim_no]
         
         # Validate candidate has valid load data
-        if not df_aday_tahmin['Yüklenme'].between(1.0, 2.0).any():
+        if not df_aday_tahmin['Yüklenme'].between(MIN_VALID_LOAD, MAX_VALID_LOAD).any():
             if verbose:
                 print(f"\n⚠️ Aday {aday_tanim_no} için geçerli bir Aday_Yüklenme değeri bulunamadı. Bu aday atlanacak.")
             continue
@@ -777,8 +765,10 @@ def run_voll_pipeline(
             if _safe_len(df_final_karsilastirma) > 0:
                 print(f"   Karşılaştırma satır: {len(df_final_karsilastirma)}")
         sayac += 1
-        if sayac == 3:
-            break
+        # Note: Remove or configure this limit for production use
+        # Currently limited to 3 candidates for testing purposes
+        # if sayac == 3:
+        #     break
 
     df_karsilastirma = pd.concat(aday_sonuclar, ignore_index=True) if aday_sonuclar else pd.DataFrame()
 
