@@ -2,3 +2,5 @@ pip install django
 pip install django-crispy-forms
 pip install mysql-connector
 pip install django-connector-python
+pip install pandas>=2.0.0
+pip install numpy>=1.24.0
